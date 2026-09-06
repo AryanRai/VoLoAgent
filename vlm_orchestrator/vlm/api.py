@@ -30,11 +30,11 @@ logger = logging.getLogger(__name__)
 # Models that reject `temperature` (deprecated by the provider). Includes
 # OpenAI reasoning models AND newer Claude (≥ 4.7).
 _NO_TEMPERATURE_RE = re.compile(
-    r"/(gpt-5(?:\.\d+)?|o[134]|(?:bedrock-)?claude-opus-4-(?:[7-9]|\d\d))(?:[-/]|$)"
+    r"(?:^|/)(gpt-5(?:\.\d+)?|gpt-6-astra|o[134]|(?:bedrock-)?claude-opus-4-(?:[7-9]|\d\d))(?:[-/]|$)"
 )
 # Subset that accepts the OpenAI `reasoning_effort` parameter — gpt-5+, o-series.
 # Claude 4.7+ rejects this param (uses its own `thinking` config instead).
-_OPENAI_REASONING_RE = re.compile(r"/(gpt-5(?:\.\d+)?|o[134])(?:[-/]|$)")
+_OPENAI_REASONING_RE = re.compile(r"(?:^|/)(gpt-5(?:\.\d+)?|gpt-6-astra|o[134])(?:[-/]|$)")
 
 
 def is_reasoning_model(model: str) -> bool:
