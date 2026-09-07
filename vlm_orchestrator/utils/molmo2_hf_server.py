@@ -50,7 +50,38 @@ _processor = None
 _model_id = "allenai/Molmo2-8B"
 
 
-def _load_model(model_id: str, quantize: str = "bf16"):
+def _bf16_offload_map(model_id: str, gpu_memory_gib: int) -> dict:
+    """Keep Molmo's vision/embedding modules resident; offload whole decoder blocks."""
+    from accelerate import init_empty_weights
+    from accelerate.utils import compute_module_sizes
+    from transformers import AutoConfig
+
+    config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+    with init_empty_weights():
+        skeleton = AutoModelForImageTextToText.from_config(
+            config, trust_remote_code=True, torch_dtype=torch.bfloat16)
+    sizes = compute_module_sizes(skeleton, dtype=torch.bfloat16)
+    names = [f"model.transformer.blocks.{i}"
+             for i in range(len(skeleton.model.transformer.blocks))]
+    # Accelerate temporarily stages one offloaded block on the GPU.
+    fixed = sizes[""] - sum(sizes[name] for name in names)
+    remaining = gpu_memory_gib * 1024**3 - fixed - max(sizes[name] for name in names)
+    if remaining < 0:
+        raise ValueError("GPU weight budget is too small for Molmo's vision and embedding modules")
+    placement = {"": 0}
+    for name in names:
+        if sizes[name] <= remaining:
+            placement[name] = 0
+            remaining -= sizes[name]
+        else:
+            placement[name] = "cpu"
+    logger.info("BF16 CPU offload: %d/%d decoder blocks in host RAM",
+                sum(value == "cpu" for value in placement.values()), len(names))
+    del skeleton
+    return placement
+
+
+def _load_model(model_id: str, quantize: str = "bf16", gpu_memory_gib: int | None = None):
     """Load Molmo2 with optional 4-bit / 8-bit quantization via bitsandbytes.
 
     ``quantize`` options:
@@ -69,9 +100,14 @@ def _load_model(model_id: str, quantize: str = "bf16"):
             model_id, trust_remote_code=True,
             torch_dtype=torch.bfloat16, device_map="cuda",
         )
+        placement = {"device_map": "cuda"}
+        if gpu_memory_gib is not None:
+            # Preserve BF16 weights while allowing layers to reside in host RAM.
+            # CUDA_VISIBLE_DEVICES selects the GPU exposed as device 0.
+            placement = {"device_map": _bf16_offload_map(model_id, gpu_memory_gib)}
         _model = AutoModelForImageTextToText.from_pretrained(
             model_id, trust_remote_code=True,
-            torch_dtype=torch.bfloat16, device_map="cuda",
+            torch_dtype=torch.bfloat16, **placement,
         )
     elif quantize in ("int8", "int4"):
         from transformers import BitsAndBytesConfig
@@ -145,7 +181,9 @@ def _generate(text_prompt: str, image: PIL.Image.Image, *,
     inputs = _processor.apply_chat_template(
         messages, add_generation_prompt=True,
         tokenize=True, return_dict=True, return_tensors="pt",
-    ).to(_model.device, dtype=torch.bfloat16)
+    # A CPU-offloaded parameter can make model.device report "meta";
+    # inputs must start on the real execution device for Accelerate hooks.
+    ).to("cuda:0", dtype=torch.bfloat16)
     do_sample = temperature > 0
     with torch.inference_mode():
         out = _model.generate(
@@ -231,13 +269,17 @@ def main():
                    help="bnb quantization: bf16 (default ~17 GB), "
                         "int8 (~10 GB), int4 (~5 GB).  Use int4 when "
                         "sharing GPU with Isaac Sim + grasp server.")
+    p.add_argument("--gpu-memory-gib", type=int,
+                   help="BF16 only: cap weight placement on visible GPU 0 and offload remaining layers to CPU. Activations need additional VRAM.")
     args = p.parse_args()
+    if args.gpu_memory_gib is not None and (args.gpu_memory_gib < 1 or args.quantize != "bf16"):
+        p.error("--gpu-memory-gib must be positive and requires --quantize bf16")
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
-    _load_model(args.model, quantize=args.quantize)
+    _load_model(args.model, quantize=args.quantize, gpu_memory_gib=args.gpu_memory_gib)
 
     import uvicorn
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
