@@ -630,6 +630,21 @@ Project page: https://chicychen.github.io/VoLo/
   Spatial Reasoning via Double Interactive RL, which equips VLMs with vision and
   robotic tools for spatial reasoning and real-world manipulation.
 
+## Experimental GR00T N1.7 DROID backend
+
+On `exp/gr00t-n17-droid`, install the optional transport dependency with
+`pip install -e '.[gr00t-n17]'` and select `--backend gr00t-n17-zmq --vla-port 5555`
+with the existing OpenPI WebSocket frontend. The official N1.7 server must use
+`OXE_DROID_RELATIVE_EEF_RELATIVE_JOINT` and its sim-policy wrapper. Strategies,
+Astra prompts, classical tools, OpenPI defaults and legacy `gr00t-zmq` are unchanged.
+
+This route requires the matching simulator-side GrootN17Backend: native 180x320
+unpadded RGB images and explicitly base-frame EEF state. It is not a drop-in
+server switch for Pi05's padded observations. The N1.7 server converts relative
+model outputs to absolute joint targets; the transport does not add joint state
+again. See [transport source](vlm_orchestrator/protocols/gr00t_n17.py) and
+[experiment setup and results](https://github.com/AryanRai/experimental/blob/exp/gr00t-n17-droid/GR00T_N17.md).
+
 ## License
 
 Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.

@@ -32,6 +32,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gr00t-n17 = ["msgpack-numpy==0.4.8"]
 dev = [
     "pytest",
     "ruff",

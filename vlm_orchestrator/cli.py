@@ -36,11 +36,12 @@ def main():
     )
     parser.add_argument(
         "--backend",
-        choices=["openpi-ws", "gr00t-zmq", "openvla-rest", "file-ipc"],
+        choices=["openpi-ws", "gr00t-zmq", "gr00t-n17-zmq", "openvla-rest", "file-ipc"],
         default="openpi-ws",
         help="VLA-server-facing protocol.  'openpi-ws' (default) for "
              "openpi policy server.  'gr00t-zmq' for NVIDIA Isaac-GR00T "
-             "policy server.  'file-ipc' for serving over a shared "
+             "legacy policy server. 'gr00t-n17-zmq' for the N1.7 DROID sim wrapper. "
+             "'file-ipc' for serving over a shared "
              "filesystem when direct TCP is blocked — combine "
              "with --vla-file-ipc-dir.",
     )
@@ -907,6 +908,12 @@ def _build_protocols(args):
         backend = StubBackend()
     elif args.backend == "openpi-ws":
         backend = OpenpiWsBackend(args.vla_host, args.vla_port)
+    elif args.backend == "gr00t-n17-zmq":
+        from vlm_orchestrator.protocols.gr00t_n17 import Gr00tN17Backend
+        backend = Gr00tN17Backend(
+            args.vla_host, args.vla_port,
+            api_token=getattr(args, "gr00t_api_token", None),
+        )
     elif args.backend == "gr00t-zmq":
         from vlm_orchestrator.protocols.gr00t_zmq import Gr00tZmqBackend
         backend = Gr00tZmqBackend(
