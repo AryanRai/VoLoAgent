@@ -24,6 +24,8 @@ The available actions are configured by ``--recovery-mode``:
 from __future__ import annotations
 
 import logging
+import os
+import json
 import time
 from typing import Any, Callable
 
@@ -365,6 +367,12 @@ class VLMFailureHandler(FailureHandler):
         # ``state.episode_step`` so that VLA chunks of different sizes
         # produce the same wall-clock check frequency.
         self._step_at_last_check: int = 0
+        self.supervisor = None
+        if os.environ.get('VOLO_STALL_SUPERVISOR') == '1':
+            from .stall import StallSupervisor, StallConfig, PROMPT
+            self.supervisor = StallSupervisor(StallConfig.environment())
+            self._system_prompt += PROMPT
+        self._recent_snapshots = []
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -372,6 +380,13 @@ class VLMFailureHandler(FailureHandler):
 
     def on_episode_start(self, obs: dict, state: Any) -> None:
         self._step_at_last_check = state.episode_step
+        if self.supervisor is not None:
+            self.supervisor.reset()
+            self._recent_snapshots.clear()
+            state.supervisor_stop = None
+            invalid = self.supervisor.clock(obs.get('__supervisor'),state.episode_step)
+            if invalid is not None:
+                state.supervisor_stop = invalid.extra['supervisor']
 
     def on_subgoal_advanced(self, obs: dict, state: Any, idx: int) -> None:
         self._step_at_last_check = state.episode_step
@@ -385,10 +400,17 @@ class VLMFailureHandler(FailureHandler):
 
         Returns ``None`` if it's not time to check yet.
         """
+        if self.supervisor is not None:
+            invalid = self.supervisor.clock(obs.get('__supervisor'),state.episode_step)
+            if invalid is not None:
+                return invalid
+            tool_failure = self.supervisor.check_tool(state)
+            if tool_failure is not None:
+                return tool_failure
         # Not time to check yet
         if (state.episode_step - self._step_at_last_check
                 < self._check_interval):
-            return None
+            return self.supervisor.decide(allow_recovery=False) if self.supervisor else None
 
         # No subgoals to check against
         if not state.subgoals:
@@ -405,6 +427,9 @@ class VLMFailureHandler(FailureHandler):
         current_image = self._get_vlm_image(obs)
         if current_image is None:
             logger.warning("  VLM handler: current_image is None, skipping")
+            if self.supervisor:
+                self.supervisor.assess(None)
+                return self.supervisor.decide()
             return None
 
         # Build context
@@ -439,6 +464,20 @@ class VLMFailureHandler(FailureHandler):
             primary_label=self._primary_label,
             extra_labels=self._extra_labels,
         )
+        if self.supervisor:
+            from vlm_orchestrator.vlm import encode_image_b64
+            for old_step, images in self._recent_snapshots:
+                for index, image in enumerate(images):
+                    user_content.append({'type':'text','text':f'RECENT step {old_step}, camera {index}:'})
+                    user_content.append({'type':'image_url','image_url':{
+                        'url':'data:image/jpeg;base64,'+encode_image_b64(image)}})
+            proprio = {key: obs[key].tolist() for key in (
+                'observation/ee_pos','observation/gripper_position','observation/joint_position')
+                if key in obs and hasattr(obs[key],'tolist')}
+            user_content.append({'type':'text','text':'Control-time progress context: '+json.dumps(
+                dict(self.supervisor.snapshot(),proprioception=proprio))})
+            self._recent_snapshots.append((state.episode_step,[im.copy() for im in [current_image,*(extra_images or [])]]))
+            self._recent_snapshots = self._recent_snapshots[-2:]
 
         # VLM call
         t0 = time.time()
@@ -447,6 +486,9 @@ class VLMFailureHandler(FailureHandler):
             elapsed = time.time() - t0
         except Exception as e:
             logger.warning(f"  VLM detection call failed: {e}; continuing")
+            if self.supervisor:
+                self.supervisor.assess(None)
+                return self.supervisor.decide()
             return None
 
         logger.info(f"  VLM detect raw ({elapsed:.1f}s): {raw[:500]}")
@@ -455,6 +497,24 @@ class VLMFailureHandler(FailureHandler):
         result = _parse_vlm_detection(raw, self._available_actions)
         result.extra["vlm_latency_s"] = round(elapsed, 2)
         result.extra["vlm_raw"] = raw
+        if self.supervisor:
+            try:
+                parsed = parse_json(raw)
+                assessment = parsed.get('progress') if isinstance(parsed,dict) else None
+            except (ValueError,TypeError,KeyError):
+                assessment = None
+            self.supervisor.assess(assessment)
+            bounded = self.supervisor.decide()
+            state.log({'type':'supervisor_check',**self.supervisor.snapshot(),
+                       'assessment':self.supervisor.assessment,
+                       'decision':bounded.action if bounded else 'continue'})
+            if bounded is not None:
+                return bounded
+            # Recovery is budgeted by the supervisor; do not allow independent
+            # VLM tool/replan decisions to bypass those limits.
+            if (self.supervisor.tool is not None or result.action != ACTION_NEXT
+                    or self.supervisor.assessment.get('phase') != 'placement'):
+                result = HandlerResult(status=STATUS_IN_PROGRESS,action=ACTION_CONTINUE,reason=result.reason)
 
         # Log
         status_icon = {

@@ -44,9 +44,10 @@ ACTION_REPLAN = "replan"      # replan remaining subtasks from current scene
 ACTION_CONTINUE = "continue"  # keep working with current instruction
 ACTION_GRASP = "grasp_tool"   # activate grasp tool for target object
 ACTION_PLACE = "place_tool"   # activate place tool at a destination
+ACTION_STOP = "stop"          # opt-in supervisor abort, never success
 
 VALID_ACTIONS = {
-    ACTION_NEXT, ACTION_REPLAN, ACTION_CONTINUE, ACTION_GRASP, ACTION_PLACE,
+    ACTION_NEXT, ACTION_REPLAN, ACTION_CONTINUE, ACTION_GRASP, ACTION_PLACE, ACTION_STOP,
 }
 
 

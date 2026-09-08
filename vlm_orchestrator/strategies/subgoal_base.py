@@ -24,6 +24,7 @@ from vlm_orchestrator.failure_handlers.base import (
     ACTION_NEXT,
     ACTION_PLACE,
     ACTION_REPLAN,
+    ACTION_STOP,
     STATUS_FAILURE,
 )
 from vlm_orchestrator.failure_handlers.instruction import generate_recovery
@@ -930,6 +931,12 @@ class SubgoalBaseStrategy(OrchestrationStrategy):
     def _on_step(
         self, obs: dict, state: SessionState,
     ) -> tuple[dict, SessionState]:
+        bounded = self._failure_handler is not None and getattr(self._failure_handler,'supervisor',None) is not None
+        if bounded:
+            result = self._failure_handler.step(obs,state)
+            if result is not None:
+                obs,state = self._execute_handler_result(obs,state,result)
+                return obs,state
         # Step-delta gating: cadence is determined by
         # ``state.episode_step`` advancing past the markers
         # ``step_at_last_check`` / ``step_at_subgoal_start``.  No
@@ -1016,6 +1023,12 @@ class SubgoalBaseStrategy(OrchestrationStrategy):
         # VLM failure handler — unified detection + action selection.
         # Replaces both GT detection and the old VLM subgoal check.
         # ==============================================================
+        if bounded:
+            # The bounded handler above owns escalation. Legacy GT/recycle
+            # paths must not create additional attempts or reset its budgets.
+            if state.rewritten_instruction:
+                obs = self.ctx.set_prompt(obs,state.rewritten_instruction)
+            return obs,state
         if self._failure_handler is not None:
             handler_result = self._failure_handler.step(obs, state)
             if handler_result is not None:
@@ -1148,6 +1161,13 @@ class SubgoalBaseStrategy(OrchestrationStrategy):
         """
         sg_idx = state.current_subgoal_idx
         sg = state.subgoals[sg_idx] if state.subgoals else "?"
+        supervisor = getattr(self._failure_handler,'supervisor',None)
+        if result.action == ACTION_STOP:
+            state.supervisor_stop = dict(result.extra.get('supervisor',{}),reason=result.reason)
+            state.flush_actions = True
+            state.grasp_tool_active = state.place_tool_active = False
+            state.log({'type':'supervisor_stop',**state.supervisor_stop})
+            return obs,state
 
         # VLMFailureHandler.step() already emitted a "vlm_detect" event
         # carrying status / action / reason / vlm_latency_s / vlm_raw —
@@ -1307,6 +1327,13 @@ class SubgoalBaseStrategy(OrchestrationStrategy):
                 state.rewritten_instruction = result.instruction
                 state.flush_actions = True
 
+        if supervisor and result.action in (ACTION_GRASP,ACTION_PLACE):
+            active = state.grasp_tool_active if result.action == ACTION_GRASP else state.place_tool_active
+            if not active:
+                return self._execute_handler_result(obs,state,supervisor.abort('tool_activation_failed'))
+        if supervisor and result.action != ACTION_CONTINUE:
+            state.flush_actions = True
+            state.log({'type':'supervisor_recovery','action':result.action,**supervisor.snapshot()})
         # Reset chunk counters after any action (except continue)
         if result.action != ACTION_CONTINUE:
             state.step_at_subgoal_start = state.episode_step

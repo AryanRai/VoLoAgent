@@ -661,7 +661,11 @@ class OrchestratorProxy:
                 # ---- grasp_with_tool: bypass VLA ----
                 # When a planned grasp is active, generate actions
                 # locally instead of forwarding to the VLA server.
-                if (
+                if getattr(state,'supervisor_stop',None) is not None:
+                    # Client owns the embodiment-specific hold and truncation.
+                    # No policy or tool inference is performed after this decision.
+                    response = {'orchestrator_stop':state.supervisor_stop}
+                elif (
                     getattr(state, "grasp_tool_active", False)
                     and state.grasp_tool_executor is not None
                 ):
@@ -837,6 +841,9 @@ class OrchestratorProxy:
                     response["orchestrator_gt_done"] = True
 
                 # Signal eval client to flush cached action chunk
+                if '__supervisor' in obs:
+                    response['orchestrator_supervisor_enabled'] = bool(getattr(
+                        getattr(self.config.strategy,'_failure_handler',None),'supervisor',None))
                 if getattr(state, "flush_actions", False):
                     response["orchestrator_flush_actions"] = True
                     state.flush_actions = False
