@@ -111,3 +111,58 @@ def test_failed_activation_becomes_structured_stop_not_policy_retry():
     _,state=strategy._execute_handler_result({},state,decision)
     assert state.supervisor_stop['reason']=='tool_activation_failed'
     assert state.flush_actions is True
+
+
+def test_missing_subgoals_cannot_bypass_deadline(monkeypatch):
+    monkeypatch.setenv('VOLO_STALL_SUPERVISOR','1')
+    handler=VLMFailureHandler(Mock(),Mock(),Mock(),Mock())
+    state=SimpleNamespace(episode_step=0,subgoals=[])
+    handler.on_episode_start({'__supervisor':{'step':0,'dt_s':1/15,'stop_supported':True}},state)
+    state.episode_step=480
+    assert handler.step({'__supervisor':{'step':480,'dt_s':1/15,'stop_supported':True}},state).action=='stop'
+
+
+def test_replan_uses_recent_failure_evidence_and_preserves_attempt_budget():
+    from vlm_orchestrator.strategies.subgoal import SubgoalStrategy
+    strategy=object.__new__(SubgoalStrategy)
+    s=StallSupervisor();clock(s,0);clock(s,240);s.assess(assessment());s.decide()
+    strategy._failure_handler=SimpleNamespace(supervisor=s,_recent_snapshots=[(240,[np.zeros((4,4,3),np.uint8)])])
+    strategy._recycle_count=0;strategy._original_subgoals=['Place orange in bowl']
+    strategy.ctx=SimpleNamespace(vlm_camera_labels=('Front',[]),prompt_style='robolab',front_image_key=None)
+    strategy._vlm_call=Mock(side_effect=RuntimeError('failed replan'))
+    state=SimpleNamespace(original_instruction='Place orange in bowl',initial_image=None,log=Mock())
+    assert strategy._recycle({},state,np.zeros((4,4,3),np.uint8)) is False
+    message=strategy._vlm_call.call_args.args[1]
+    assert 'Recent visual stall evidence' in str(message) and 'orange remains on the table' in str(message)
+    assert s.replans==1
+
+
+def test_replanned_instruction_applied_before_policy_query():
+    from vlm_orchestrator.strategies.subgoal import SubgoalStrategy
+    strategy=object.__new__(SubgoalStrategy)
+    decision=Mock(action='replan')
+    strategy._failure_handler=SimpleNamespace(supervisor=object(),step=lambda *args:decision)
+    state=SimpleNamespace(rewritten_instruction='Replanned goal')
+    strategy._execute_handler_result=Mock(return_value=({},state))
+    strategy.ctx=SimpleNamespace(set_prompt=lambda obs,text:dict(obs,prompt=text))
+    obs,_=strategy._on_step({},state)
+    assert obs['prompt']=='Replanned goal'
+
+
+@pytest.mark.parametrize('raises',[False,True])
+def test_failure_during_tool_step_discards_its_chunk(raises):
+    from vlm_orchestrator.proxy import _step_with_supervision
+    from vlm_orchestrator.strategies.subgoal import SubgoalStrategy
+    strategy=object.__new__(SubgoalStrategy)
+    s=StallSupervisor();clock(s,0);s.tool='grasp';s.tool_start=0
+    strategy._failure_handler=SimpleNamespace(supervisor=s)
+    executor=SimpleNamespace(phase=SimpleNamespace(value='approaching'))
+    def step(*args):
+        executor.phase.value='failed'
+        if raises:raise RuntimeError('tool failed')
+        return {'actions':np.zeros((8,8))}
+    executor.step=step
+    state=SimpleNamespace(grasp_tool_executor=executor,subgoals=['Pick orange'],current_subgoal_idx=0,
+                          grasp_tool_active=True,place_tool_active=False,log=Mock())
+    response=_step_with_supervision(strategy,{},state,'grasp')
+    assert 'actions' not in response and 'orchestrator_stop' in response

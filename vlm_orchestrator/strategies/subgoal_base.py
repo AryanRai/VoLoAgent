@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+import json
+
 from vlm_orchestrator.failure_handlers.base import (
     HandlerResult,
     ACTION_CONTINUE,
@@ -936,6 +938,8 @@ class SubgoalBaseStrategy(OrchestrationStrategy):
             result = self._failure_handler.step(obs,state)
             if result is not None:
                 obs,state = self._execute_handler_result(obs,state,result)
+                if state.rewritten_instruction:
+                    obs = self.ctx.set_prompt(obs,state.rewritten_instruction)
                 return obs,state
         # Step-delta gating: cadence is determined by
         # ``state.episode_step`` advancing past the markers
@@ -3481,6 +3485,9 @@ class SubgoalBaseStrategy(OrchestrationStrategy):
                 f"(objects may look close together but are not actually "
                 f"in the correct position). "
             )
+        supervisor = getattr(self._failure_handler,'supervisor',None)
+        if supervisor is not None:
+            text += '\nRecent visual stall evidence and bounded attempts: ' + json.dumps(supervisor.snapshot())
         text += (
             "\nList ALL remaining subgoals to complete the task "
             "from the current state."
@@ -3494,6 +3501,11 @@ class SubgoalBaseStrategy(OrchestrationStrategy):
             extra_images=None, initial_extra_images=None,
             primary_label=primary_label,
         )
+        if supervisor is not None:
+            for old_step, images in self._failure_handler._recent_snapshots:
+                for image in images:
+                    user_content.extend([{'type':'text','text':f'Recent monitoring step {old_step}:'},
+                        {'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+encode_image_b64(image)}}])
 
         recycle_prompt = (
             RECYCLE_SYSTEM_PROMPT_VLABENCH

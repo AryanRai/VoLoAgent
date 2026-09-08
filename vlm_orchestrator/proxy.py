@@ -40,6 +40,25 @@ from vlm_orchestrator.strategies.passthrough import PassthroughStrategy
 logger = logging.getLogger(__name__)
 
 
+def _step_with_supervision(strategy, obs, state, tool):
+    """Reject a failed tool's fallback chunk before it reaches the robot."""
+    executor = getattr(state,f'{tool}_tool_executor')
+    supervisor = getattr(getattr(strategy,'_failure_handler',None),'supervisor',None)
+    if supervisor is None:
+        return executor.step(obs,state)
+    try:
+        response = executor.step(obs,state)
+    except Exception as error:
+        logger.exception('Bounded %s tool execution failed',tool)
+        failure = supervisor.abort(f'{tool}_tool_exception:{type(error).__name__}')
+    else:
+        failure = supervisor.check_tool(state)
+    if failure is not None:
+        _,state = strategy._execute_handler_result(obs,state,failure)
+        return {'orchestrator_stop':state.supervisor_stop}
+    return response
+
+
 def _enumerate_listen_addrs(host: str) -> list[tuple[str, str]]:
     """Return ``(ifname, ipv4)`` pairs the orchestrator is reachable on.
 
@@ -669,7 +688,7 @@ class OrchestratorProxy:
                     getattr(state, "grasp_tool_active", False)
                     and state.grasp_tool_executor is not None
                 ):
-                    response = state.grasp_tool_executor.step(obs, state)
+                    response = _step_with_supervision(self.config.strategy,obs,state,'grasp')
                     response["orchestrator_grasp_tool"] = {
                         "active": True,
                         "phase": state.grasp_tool_phase,
@@ -685,7 +704,7 @@ class OrchestratorProxy:
                     and state.place_tool_executor is not None
                 ):
                     # ---- place_with_tool: bypass VLA ----
-                    response = state.place_tool_executor.step(obs, state)
+                    response = _step_with_supervision(self.config.strategy,obs,state,'place')
                     response["orchestrator_place_tool"] = {
                         "active": True,
                         "phase": state.place_tool_phase,
@@ -842,8 +861,10 @@ class OrchestratorProxy:
 
                 # Signal eval client to flush cached action chunk
                 if '__supervisor' in obs:
-                    response['orchestrator_supervisor_enabled'] = bool(getattr(
-                        getattr(self.config.strategy,'_failure_handler',None),'supervisor',None))
+                    supervisor = getattr(getattr(self.config.strategy,'_failure_handler',None),'supervisor',None)
+                    response['orchestrator_supervisor_enabled'] = supervisor is not None
+                    if supervisor is not None:
+                        response['orchestrator_supervisor'] = supervisor.snapshot()
                 if getattr(state, "flush_actions", False):
                     response["orchestrator_flush_actions"] = True
                     state.flush_actions = False

@@ -49,6 +49,7 @@ class StallSupervisor:
         self.tool = self.tool_start = self.stop_reason = None
         self.assessment = {}
         self.history = []
+        self.decisions = []
 
     def clock(self, metadata, step):
         if not isinstance(metadata, dict) or metadata.get('stop_supported') is not True:
@@ -69,7 +70,9 @@ class StallSupervisor:
         return {'step':self.step,'dt_s':self.dt,'replans':self.replans,'grasps':self.grasps,
                 'places':self.places,'tool':self.tool,'last_progress_step':self.progress_step,
                 'elapsed_control_s':(self.step-self.started)*self.dt if self.dt is not None else None,
-                'stop_reason':self.stop_reason,'recent_assessments':self.history[-3:]}
+                'stop_reason':self.stop_reason,'recent_assessments':self.history[-3:],
+                'recent_decisions':self.decisions[-3:], 'tool_start_step':self.tool_start,
+                'hard_steps':self.config.hard_steps,'tool_steps':self.config.tool_steps}
 
     def abort(self, reason):
         self.stop_reason = self.stop_reason or reason

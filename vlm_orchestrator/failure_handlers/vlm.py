@@ -415,6 +415,9 @@ class VLMFailureHandler(FailureHandler):
         # No subgoals to check against
         if not state.subgoals:
             logger.warning("  VLM handler: no subgoals, skipping")
+            if self.supervisor:
+                self.supervisor.assess(None)
+                return self.supervisor.decide()
             return None
 
         self._step_at_last_check = state.episode_step
@@ -505,6 +508,10 @@ class VLMFailureHandler(FailureHandler):
                 assessment = None
             self.supervisor.assess(assessment)
             bounded = self.supervisor.decide()
+            self.supervisor.decisions.append({'step':state.episode_step,
+                'action':bounded.action if bounded else 'continue',
+                'reason':bounded.reason if bounded else result.reason})
+            self.supervisor.decisions = self.supervisor.decisions[-3:]
             state.log({'type':'supervisor_check',**self.supervisor.snapshot(),
                        'assessment':self.supervisor.assessment,
                        'decision':bounded.action if bounded else 'continue'})
