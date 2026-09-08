@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import os
 import threading
 import time
 
@@ -141,6 +142,18 @@ class Gr00tN17Connection(BackendConnection):
         if not isinstance(response, (list, tuple)) or len(response) != 2:
             raise ValueError("Expected GR00T (actions, info) response")
         result = n17_action_to_canonical(response[0])
+        capture_root = os.environ.get('POLICY_CAPTURE_DIR')
+        if capture_root:
+            from pathlib import Path
+            from vlm_orchestrator.policy_capture import save_capture, source_revision
+            capture_id = canonical_obs.get('__capture_id')
+            if not capture_id:
+                raise ValueError('Capture enabled but client supplied no capture_id')
+            result['policy_capture'] = save_capture(capture_root, capture_id, 'native', {
+                'canonical': canonical_obs, 'native_request': request['data']['observation'],
+                'native_response': response, 'decoded_chunk': result['actions'],
+                'model': MODEL, 'revision': MODEL_REVISION, 'embodiment': EMBODIMENT,
+                'volo_revision': source_revision(Path(__file__).parent)})
         result["policy_timing"] = {"round_trip_ms": elapsed_ms}
         return result
 
