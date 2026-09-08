@@ -40,6 +40,20 @@ from vlm_orchestrator.strategies.passthrough import PassthroughStrategy
 logger = logging.getLogger(__name__)
 
 
+def fresh_goal_state(previous: SessionState) -> SessionState:
+    """Discard goal-local state only when the existing client opts in.
+
+    Models/transport stay alive. Strategy.process() sees infer_count=0 and
+    invokes its existing episode initialization, including failure handlers.
+    Never carry a grasp attachment or an interrupted tool into another goal.
+    """
+    for name in ('grasp_tool_executor', 'place_tool_executor'):
+        executor = getattr(previous, name, None)
+        if executor is not None:
+            executor.reset()  # fail closed if an active tool cannot reset
+    return SessionState(episode_step=previous.episode_step)
+
+
 def _step_with_supervision(strategy, obs, state, tool):
     """Reject a failed tool's fallback chunk before it reaches the robot."""
     executor = getattr(state,f'{tool}_tool_executor')
@@ -482,6 +496,9 @@ class OrchestratorProxy:
                 # episode even when the prompt is unchanged (e.g. same
                 # task, different trial).
                 episode_marker = obs.pop("__episode_id", None)
+                fresh_goal = obs.pop("__fresh_goal", False) is True
+                if fresh_goal and episode_marker is None:
+                    raise ValueError('Fresh goal requires an explicit episode marker')
 
                 # Stable per-task slug from the eval client.  Used in
                 # place of slugifying the prompt for episode-dir naming
@@ -559,6 +576,8 @@ class OrchestratorProxy:
                                 "[task_failure_logger] end failed"
                             )
 
+                    if fresh_goal:
+                        state = fresh_goal_state(state)
                     self._last_instruction = client_prompt
                     next_ep_id = self._current_episode_id + 1
                     self._current_episode_id = next_ep_id
@@ -870,6 +889,8 @@ class OrchestratorProxy:
                     state.flush_actions = False
 
                 # Frame-level metadata for annotated videos
+                if fresh_goal:
+                    response['orchestrator_goal_id'] = episode_marker
                 response["orchestrator_use_front_camera"] = bool(
                     getattr(
                         getattr(self.config.strategy, "ctx", None),
