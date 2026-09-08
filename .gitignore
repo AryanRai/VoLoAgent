@@ -24,3 +24,10 @@ paper/
 # Local presentation artifacts (not part of the source release)
 scripts/generate_volo_orchestrator_slide.py
 volo_vlm_orchestrator_diagram.pptx
+
+# Opt-in experiment evidence belongs on the runtime/results disk.
+policy-capture/
+*.npz
+*.npy
+*.mcap
+*.hdf5

@@ -126,6 +126,11 @@ class Gr00tN17Connection(BackendConnection):
         if self._api_token:
             request["api_token"] = self._api_token
 
+        if os.environ.get('POLICY_CAPTURE_DIR'):
+            from vlm_orchestrator.policy_capture import save_capture
+            save_capture(os.environ['POLICY_CAPTURE_DIR'],canonical_obs['__capture_id'],
+                         'request',{'native_request':request['data']['observation']})
+
         def round_trip():
             with self._lock:
                 self._socket.send(pack(request))
