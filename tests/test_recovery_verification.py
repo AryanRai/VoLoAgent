@@ -99,3 +99,21 @@ def test_strategy_tool_constructor_arguments_are_supported():
         if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id in classes:
             params=inspect.signature(classes[node.func.id]).parameters
             assert all(k.arg in params for k in node.keywords), (node.lineno,node.func.id)
+
+
+def test_verified_grasp_resets_timer_immediately_but_not_retry_budget():
+    from vlm_orchestrator.proxy import _step_with_supervision
+    from vlm_orchestrator.failure_handlers.stall import StallSupervisor
+    supervisor=StallSupervisor()
+    supervisor.clock({'step':0,'dt_s':1/15,'stop_supported':True},0)
+    supervisor.clock({'step':408,'dt_s':1/15,'stop_supported':True},408)
+    supervisor.replans=supervisor.grasps=1;supervisor.tool='grasp';supervisor.tool_start=320
+    executor=SimpleNamespace(_verified_recovery=True,_target_object='purple target',
+        phase=SimpleNamespace(value='done'),verify_outcome=lambda *args:True,
+        _outcome_assessment={'response':{'evidence':'The purple target is visibly held and lifted clear of the table.'}},
+        step=lambda *args:{'actions':np.ones((8,8))})
+    state=SimpleNamespace(grasp_tool_executor=executor)
+    strategy=SimpleNamespace(_failure_handler=SimpleNamespace(supervisor=supervisor))
+    response=_step_with_supervision(strategy,{},state,'grasp')
+    assert 'actions' in response and supervisor.progress_step==408
+    assert supervisor.rank==3 and (supervisor.replans,supervisor.grasps)==(1,1)

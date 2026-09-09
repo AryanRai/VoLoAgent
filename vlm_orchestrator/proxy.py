@@ -76,6 +76,11 @@ def _step_with_supervision(strategy, obs, state, tool):
             if not accepted:
                 failure = supervisor.abort('recovery_grasp_outcome_unverified')
             else:
+                # A verified physical milestone must reach the client clock in
+                # this response, not wait up to 80 steps for periodic monitoring.
+                evidence = executor._outcome_assessment['response']['evidence']
+                supervisor.assess(dict(supervisor.assessment, phase='lift', held=True,
+                    target_confirmed=True, target=executor._target_object, evidence=evidence))
                 failure = supervisor.check_tool(state)
         else:
             failure = supervisor.check_tool(state)
