@@ -166,3 +166,17 @@ def test_failure_during_tool_step_discards_its_chunk(raises):
                           grasp_tool_active=True,place_tool_active=False,log=Mock())
     response=_step_with_supervision(strategy,{},state,'grasp')
     assert 'actions' not in response and 'orchestrator_stop' in response
+
+
+@pytest.mark.parametrize('case', ['no_image', 'failed_call', 'exhausted'])
+def test_bounded_failed_replan_aborts_instead_of_resuming_policy(case):
+    from vlm_orchestrator.strategies.subgoal import SubgoalStrategy
+    strategy=object.__new__(SubgoalStrategy)
+    s=StallSupervisor();clock(s,0);clock(s,240)
+    strategy._failure_handler=SimpleNamespace(supervisor=s)
+    strategy._recycle_count=999 if case=='exhausted' else 0
+    strategy._recycle=Mock(return_value=False)
+    strategy.ctx=SimpleNamespace(get_vlm_image=lambda obs:None if case=='no_image' else np.zeros((4,4,3),np.uint8))
+    state=SimpleNamespace(current_subgoal_idx=0,subgoals=['Move target'],log=Mock())
+    _,state=strategy._execute_handler_result({},state,s.decide())
+    assert state.supervisor_stop['reason']=='replan_failed' and state.flush_actions

@@ -1217,6 +1217,7 @@ class SubgoalBaseStrategy(OrchestrationStrategy):
                     )
 
         elif result.action == ACTION_REPLAN:
+            replan_succeeded = False
             logger.info(
                 f"  ↻ VLM handler: replan (reason: {result.reason})"
             )
@@ -1237,6 +1238,7 @@ class SubgoalBaseStrategy(OrchestrationStrategy):
                         "  ↻ Replan failed — no image available"
                     )
                 elif self._recycle(obs, state, image):
+                    replan_succeeded = True
                     logger.info(
                         f"  ↻ Replanned → {len(state.subgoals)} "
                         f"subgoal(s), starting with "
@@ -1253,6 +1255,9 @@ class SubgoalBaseStrategy(OrchestrationStrategy):
                         "reason": "recycle returned False",
                         "subgoal_idx": sg_idx,
                     })
+
+            if supervisor and not replan_succeeded:
+                return self._execute_handler_result(obs, state, supervisor.abort('replan_failed'))
 
         elif result.action == ACTION_GRASP:
             target = result.grasp_target or _extract_target_object(sg)
