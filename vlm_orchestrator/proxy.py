@@ -66,7 +66,19 @@ def _step_with_supervision(strategy, obs, state, tool):
         logger.exception('Bounded %s tool execution failed',tool)
         failure = supervisor.abort(f'{tool}_tool_exception:{type(error).__name__}')
     else:
-        failure = supervisor.check_tool(state)
+        if (tool == 'grasp' and getattr(executor, '_verified_recovery', False)
+                and getattr(executor.phase, 'value', None) == 'done'):
+            try:
+                accepted = executor.verify_outcome(obs, state)
+            except Exception:
+                logger.exception('Recovery outcome verification failed')
+                accepted = False
+            if not accepted:
+                failure = supervisor.abort('recovery_grasp_outcome_unverified')
+            else:
+                failure = supervisor.check_tool(state)
+        else:
+            failure = supervisor.check_tool(state)
     if failure is not None:
         _,state = strategy._execute_handler_result(obs,state,failure)
         return {'orchestrator_stop':state.supervisor_stop}

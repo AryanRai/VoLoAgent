@@ -369,6 +369,7 @@ class GraspPhase(str, Enum):
     SETTLE_HOLD = "settle_hold"       # TESTING: hold final waypoint to let ramp-lag decay
     INTEGRAL_SETTLE = "integral_settle"  # ROBOLAB: integral correction of P-controller undershoot
     MEASURING = "measuring"           # one-shot: capture post-move metrics, then DONE
+    VERIFYING = "verifying"           # opt-in: fresh observation after final chunk
     DONE = "done"
     FAILED = "failed"
 
@@ -433,7 +434,11 @@ class GraspToolExecutor:
         topdown_threshold: float | None = None,
         motion_planner: "MotionPlanner | None" = None,
         stack_mode_enabled: bool = False,
+        verification_call=None,
     ):
+        self._verification_call = verification_call
+        self._verified_recovery = False
+        self._outcome_verified = None
         self._grasp_client = GraspClient(url=grasp_server_url)
         self._seg_mode = GraspSegMode(seg_mode)
         self._env_mode = GraspEnvMode(env_mode)
@@ -579,6 +584,31 @@ class GraspToolExecutor:
     # Start
     # ------------------------------------------------------------------
 
+    def _verified_segment(self, image, target, state, stage):
+        from .verification import verified_segment
+        return verified_segment(self._grasp_client.detect_and_segment, self._verification_call,
+                                image, target, lambda audit: state.log({
+                                    'type': 'recovery_identity_check', 'stage': stage,
+                                    'step': state.episode_step, **audit}))
+
+    def verify_outcome(self, obs, state):
+        """A fallible visual gate; never overrides RoboLab task predicates."""
+        if not self._verified_recovery:
+            return True
+        if self._outcome_verified is not None:
+            return self._outcome_verified
+        from .verification import verify_grasp_outcome
+        proprio = {k: np.asarray(obs[k]).tolist() for k in (
+            'observation/joint_position', 'observation/gripper_position', 'observation/ee_pos') if k in obs}
+        accepted, audit = verify_grasp_outcome(
+            self._verification_call, self._recovery_before, self._extract_image(obs),
+            obs.get('observation/wrist_image_left_raw'), self._target_object, proprio)
+        self._outcome_verified = accepted
+        self._outcome_assessment = audit
+        state.log({'type': 'recovery_outcome_check', 'step': state.episode_step,
+                   'target': self._target_object, **audit})
+        return accepted
+
     def start(
         self,
         target_object: str,
@@ -605,6 +635,22 @@ class GraspToolExecutor:
         subsequent ``step()`` calls will serve the planned trajectory.
         """
         self._target_object = target_object
+        import os
+        self._verified_recovery = os.environ.get('VOLO_VERIFIED_RECOVERY') == '1'
+        self._outcome_verified = None
+        if self._verified_recovery:
+            # Gate even the legacy release/lift preparation, not only GraspGen.
+            try:
+                if (os.environ.get('VOLO_STALL_SUPERVISOR') != '1'
+                        or self._seg_mode != GraspSegMode.SAM3 or not callable(self._verification_call)):
+                    raise RuntimeError('Verified recovery requires bounded supervision, SAM3 and VLM callable')
+                self._recovery_before = self._extract_image(obs).copy()
+                self._verified_segment(self._recovery_before, target_object, state, 'preflight')
+            except Exception as error:
+                self._phase = GraspPhase.FAILED
+                self._status_message = str(error)
+                state.log({'type': 'recovery_identity_rejected', 'reason': str(error)})
+                return
         self._stack_this_grasp = bool(stack)
         self._status_message = f"Lifting arm for '{target_object}'..."
         self._last_obs = obs
@@ -841,11 +887,12 @@ class GraspToolExecutor:
             elif self._seg_mode == GraspSegMode.SAM3:
                 # ---- SAM3: unified detect + segment in one call ----
                 logger.info(f"  Using SAM3 for '{target_object}'")
-                mask, detection_score, bbox = (
-                    self._grasp_client.detect_and_segment(
-                        image, target_object,
-                    )
-                )
+                if self._verified_recovery:
+                    # Fresh geometry after the release/perception lift; never
+                    # reuse the preflight mask after physical scene changes.
+                    mask, detection_score, bbox = self._verified_segment(image, target_object, state, 'planning')
+                else:
+                    mask, detection_score, bbox = self._grasp_client.detect_and_segment(image, target_object)
                 bbox = tuple(bbox)
                 logger.info(
                     f"  SAM3 detection: '{target_object}' at {bbox} "
@@ -1201,6 +1248,15 @@ class GraspToolExecutor:
         Returns a dict compatible with the VLA response format:
         ``{"actions": np.ndarray shape (horizon, action_dim)}``.
         """
+        if self._phase == GraspPhase.VERIFYING:
+            try:
+                accepted = self.verify_outcome(obs, state)
+            except Exception:
+                logger.exception('Recovery outcome check failed')
+                accepted = False
+            self._phase = GraspPhase.DONE if accepted else GraspPhase.FAILED
+            self._status_message = 'Verified held target' if accepted else 'recovery_grasp_outcome_unverified'
+            return self._noop_response(obs)
         if self._phase == GraspPhase.RELEASING:
             return self._step_releasing(obs, state)
 
@@ -1981,7 +2037,7 @@ class GraspToolExecutor:
 
         elif self._phase == GraspPhase.RETREATING:
             logger.info("  Retreat complete → DONE")
-            self._phase = GraspPhase.DONE
+            self._phase = GraspPhase.VERIFYING if self._verified_recovery else GraspPhase.DONE
             self._status_message = "Grasp complete — handing back to VLA"
 
     # ------------------------------------------------------------------

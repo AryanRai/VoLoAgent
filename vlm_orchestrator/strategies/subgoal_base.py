@@ -1553,7 +1553,7 @@ class SubgoalBaseStrategy(OrchestrationStrategy):
                 # Lazy-create executor if needed
                 if state.grasp_tool_executor is None:
                     from vlm_orchestrator.grasp.tool import GraspToolExecutor
-                    state.grasp_tool_executor = GraspToolExecutor(seg_mode=self._grasp_seg_mode, env_mode=self._env_mode, use_front_camera=self._use_front_camera, topdown_threshold=self._grasp_topdown_threshold, motion_planner=self._get_motion_planner(), stack_mode_enabled=self._stack_mode_enabled)
+                    state.grasp_tool_executor = GraspToolExecutor(seg_mode=self._grasp_seg_mode, env_mode=self._env_mode, use_front_camera=self._use_front_camera, topdown_threshold=self._grasp_topdown_threshold, motion_planner=self._get_motion_planner(), stack_mode_enabled=self._stack_mode_enabled, verification_call=self._vlm_call)
                 # Expose HITL handle so executor can push debug images
                 state._hitl = self._hitl
                 state.grasp_tool_executor.start(
@@ -1810,7 +1810,7 @@ class SubgoalBaseStrategy(OrchestrationStrategy):
                         from vlm_orchestrator.grasp.tool import (
                             GraspToolExecutor,
                         )
-                        state.grasp_tool_executor = GraspToolExecutor(seg_mode=self._grasp_seg_mode, env_mode=self._env_mode, use_front_camera=self._use_front_camera, topdown_threshold=self._grasp_topdown_threshold, motion_planner=self._get_motion_planner(), stack_mode_enabled=self._stack_mode_enabled)
+                        state.grasp_tool_executor = GraspToolExecutor(seg_mode=self._grasp_seg_mode, env_mode=self._env_mode, use_front_camera=self._use_front_camera, topdown_threshold=self._grasp_topdown_threshold, motion_planner=self._get_motion_planner(), stack_mode_enabled=self._stack_mode_enabled, verification_call=self._vlm_call)
                     # Expose HITL handle for debug visualization
                     state._hitl = hitl
                     state.grasp_tool_executor.start(
@@ -3135,6 +3135,7 @@ class SubgoalBaseStrategy(OrchestrationStrategy):
                 topdown_threshold=self._grasp_topdown_threshold,
                 motion_planner=self._get_motion_planner(),
                 stack_mode_enabled=self._stack_mode_enabled,
+                verification_call=self._vlm_call,
             )
 
         if self._hitl is not None:
@@ -3269,7 +3270,7 @@ class SubgoalBaseStrategy(OrchestrationStrategy):
         )
         if state.grasp_tool_executor is None:
             from vlm_orchestrator.grasp.tool import GraspToolExecutor
-            state.grasp_tool_executor = GraspToolExecutor(seg_mode=self._grasp_seg_mode, env_mode=self._env_mode, use_front_camera=self._use_front_camera, topdown_threshold=self._grasp_topdown_threshold, motion_planner=self._get_motion_planner(), stack_mode_enabled=self._stack_mode_enabled)
+            state.grasp_tool_executor = GraspToolExecutor(seg_mode=self._grasp_seg_mode, env_mode=self._env_mode, use_front_camera=self._use_front_camera, topdown_threshold=self._grasp_topdown_threshold, motion_planner=self._get_motion_planner(), stack_mode_enabled=self._stack_mode_enabled, verification_call=self._vlm_call)
 
         if self._hitl is not None:
             state._hitl = self._hitl
