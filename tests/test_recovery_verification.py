@@ -117,3 +117,17 @@ def test_verified_grasp_resets_timer_immediately_but_not_retry_budget():
     response=_step_with_supervision(strategy,{},state,'grasp')
     assert 'actions' in response and supervisor.progress_step==408
     assert supervisor.rank==3 and (supervisor.replans,supervisor.grasps)==(1,1)
+
+
+def test_between_relation_retained_for_verification_and_lossless_mask_saved(tmp_path,monkeypatch):
+    from vlm_orchestrator.policy_capture import load_capture
+    monkeypatch.setenv('RECORD_LOG_DIR',str(tmp_path))
+    target='purple object between plate and container'
+    assert target_queries(target)==['purple object',target]
+    image=np.arange(8*8*3,dtype=np.uint8).reshape(8,8,3)
+    mask=np.zeros((8,8),bool);mask[2:4,2:4]=True
+    accepted,audit=verify_mask(Mock(return_value=verdict(False)),image,mask,target)
+    captured=load_capture(audit['capture']['manifest'])
+    assert not accepted and captured['target']==target
+    np.testing.assert_array_equal(captured['image'],image)
+    np.testing.assert_array_equal(captured['mask'],mask)

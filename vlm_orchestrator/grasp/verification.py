@@ -5,7 +5,10 @@ All positive assessments remain fallible visual judgments, recorded for audit.
 """
 import hashlib
 import json
+import os
+from pathlib import Path
 import re
+import uuid
 import numpy as np
 from vlm_orchestrator.vlm import encode_image_b64, parse_json
 
@@ -13,7 +16,7 @@ from vlm_orchestrator.vlm import encode_image_b64, parse_json
 def target_queries(target):
     # Preserve the full relation for verification. Do not delete it from the
     # goal or assume the first same-colour instance is the intended object.
-    noun = re.split(r'\s+(?:beside|next to|near|in front of|behind|to the (?:left|right) of)\s+',
+    noun = re.split(r'\s+(?:beside|next to|near|in front of|behind|between|under|above|below|to the (?:left|right) of)\s+',
                     target, maxsplit=1, flags=re.IGNORECASE)[0].strip()
     return list(dict.fromkeys([noun, target.strip()]))[:2]
 
@@ -63,6 +66,14 @@ Return JSON: {"target_matches": bool, "mask_excludes_other_objects": bool,
     audit.update(mask_sha256=hashlib.sha256(mask.tobytes()).hexdigest(),
                  image_sha256=hashlib.sha256(image.tobytes()).hexdigest(),
                  mask_pixels=int(mask.sum()), image_shape=list(image.shape))
+    capture_root = os.environ.get('VOLO_RECOVERY_CAPTURE_DIR')
+    if not capture_root and os.environ.get('RECORD_LOG_DIR'):
+        capture_root = Path(os.environ['RECORD_LOG_DIR']) / 'recovery-masks'
+    if capture_root:
+        from vlm_orchestrator.policy_capture import save_capture
+        audit['capture'] = save_capture(capture_root, uuid.uuid4().hex, 'mask', {
+            'image': image, 'mask': mask, 'spotlight': overlay,
+            'target': target, 'assessment': audit.copy()})
     return accepted, audit
 
 
